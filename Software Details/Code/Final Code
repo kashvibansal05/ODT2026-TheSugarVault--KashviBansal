@@ -1,0 +1,266 @@
+from machine import Pin, PWM, ADC
+import neopixel
+import time
+
+#PINS
+#IR SENSOR 
+ir = Pin(2, Pin.IN, Pin.PULL_UP)
+
+#BUZZER
+buzzer = PWM(Pin(15))
+buzzer.freq(1000)
+
+#LED STRIP
+NUM_LEDS = 30
+np = neopixel.NeoPixel(Pin(4), NUM_LEDS)
+
+#JOYSTICK (taken help of ai to code)
+joy_x = ADC(Pin(34))
+joy_y = ADC(Pin(35))
+joy_x.atten(ADC.ATTN_11DB)
+joy_y.atten(ADC.ATTN_11DB)
+
+#MOTOR
+fb_in1 = PWM(Pin(12))
+fb_in2 = PWM(Pin(13))
+lr_in1 = PWM(Pin(18))
+lr_in2 = PWM(Pin(19))
+
+for m in [fb_in1, fb_in2, lr_in1, lr_in2]:
+    m.freq(1000)
+
+#CLAW MOTOR (up/down)
+lift_in1 = Pin(26, Pin.OUT)
+lift_in2 = Pin(27, Pin.OUT)
+
+#SERVO
+servo = PWM(Pin(25), freq=50)
+
+#PUSH BUTTON
+button = Pin(5, Pin.IN, Pin.PULL_UP)
+
+#ULTRASONIC
+trig = Pin(32, Pin.OUT)
+echo = Pin(33, Pin.IN)
+
+#SETTINGS 
+CENTER_LOW = 1800
+CENTER_HIGH = 2200
+SPEED = 500
+
+game_active = False
+start_time = 0
+
+#FUNCTIONS
+
+#LED
+def clear():
+    for i in range(NUM_LEDS):
+        np[i] = (0,0,0)
+    np.write()
+
+def set_color(r,g,b):
+    for i in range(NUM_LEDS):
+        np[i] = (r,g,b)
+    np.write()
+
+def animate(color):
+    for i in range(NUM_LEDS):
+        np[i] = color
+        np.write()
+        time.sleep(0.05)
+
+#BUZZER
+def start_sound():
+    tones = [800,1000,1200,1500] #(taken help of ai to figure out the notes)
+    for t in tones:
+        buzzer.freq(t)
+        buzzer.duty(500)
+        time.sleep(0.15)
+    buzzer.duty(0)
+
+def win_sound():
+    for t in [1000,1200,1500]:
+        buzzer.freq(t)
+        buzzer.duty(600)
+        time.sleep(0.2)
+    buzzer.duty(0)
+
+def lose_sound():
+    for t in [600,400,300]:
+        buzzer.freq(t)
+        buzzer.duty(600)
+        time.sleep(0.3)
+    buzzer.duty(0)
+
+#SERVO
+def set_servo_angle(angle):
+    duty = int(40 + (angle / 180) * 115)
+    servo.duty(duty)
+
+#LIFT MOTOR (UP/DOWN)
+def motor_up():
+    lift_in1.value(0)
+    lift_in2.value(1)
+
+def motor_down():
+    lift_in1.value(1)
+    lift_in2.value(0)
+
+def motor_stop():
+    lift_in1.value(0)
+    lift_in2.value(0)
+
+#MOVEMENT STOP
+def stop_all():
+    fb_in1.duty(0)
+    fb_in2.duty(0)
+    lr_in1.duty(0)
+    lr_in2.duty(0)
+
+#ULTRASONIC
+def check_win():
+    for _ in range(5):
+        trig.value(0)
+        time.sleep_us(2)
+        trig.value(1)
+        time.sleep_us(10)
+        trig.value(0)
+
+        t1 = time.ticks_us()
+        while echo.value() == 0:
+            if time.ticks_diff(time.ticks_us(), t1) > 30000:
+                return False
+
+        start = time.ticks_us()
+
+        t2 = time.ticks_us()
+        while echo.value() == 1:
+            if time.ticks_diff(time.ticks_us(), t2) > 30000:
+                return False
+
+        end = time.ticks_us()
+        duration = time.ticks_diff(end, start)
+        distance = (duration * 0.034) / 2
+
+        if distance < 10:
+            return True
+
+        time.sleep(1)
+
+    return False
+
+#CLAW SEQUENCE
+def run_claw_sequence():
+    # open
+    set_servo_angle(0)
+    time.sleep(1)
+
+    # down
+    motor_down()
+    time.sleep(3)
+    motor_stop()
+
+    # close
+    set_servo_angle(90)
+    time.sleep(1)
+
+    # up
+    motor_up()
+    time.sleep(3)
+    motor_stop()
+
+    # move to drop (front-left)
+    fb_in1.duty(SPEED)
+    fb_in2.duty(0)
+    lr_in1.duty(0)
+    lr_in2.duty(SPEED)
+    time.sleep(2)
+    stop_all()
+
+    # drop
+    set_servo_angle(0)
+    time.sleep(2)
+
+#MAIN LOOP 
+while True:
+
+    #WAIT FOR COIN
+    if not game_active and ir.value() == 0:
+        print("Coin detected")
+
+        start_sound()
+
+        animate((255,0,0))
+        animate((0,255,0))
+        animate((0,0,255))
+
+        set_color(0,0,255)
+
+        game_active = True
+        start_time = time.time()
+
+    #GAME ACTIVE
+    if game_active:
+
+        # TIMER CHECK
+        if time.time() - start_time > 60:
+            print("TIME UP")
+            stop_all()
+            set_color(255,0,0)
+            lose_sound()
+            time.sleep(15)
+            clear()
+            game_active = False
+            continue
+
+        # JOYSTICK CONTROL
+        x = joy_x.read()
+        y = joy_y.read()
+
+        # front/back
+        if y > CENTER_HIGH:
+            fb_in1.duty(0)
+            fb_in2.duty(SPEED)
+        elif y < CENTER_LOW:
+            fb_in1.duty(SPEED)
+            fb_in2.duty(0)
+        else:
+            fb_in1.duty(0)
+            fb_in2.duty(0)
+
+        # left/right
+        if x > CENTER_HIGH:
+            lr_in1.duty(SPEED)
+            lr_in2.duty(0)
+        elif x < CENTER_LOW:
+            lr_in1.duty(0)
+            lr_in2.duty(SPEED)
+        else:
+            lr_in1.duty(0)
+            lr_in2.duty(0)
+
+        # BUTTON AND CLAW ACTION
+        if button.value() == 0:
+            stop_all()
+            run_claw_sequence()
+
+            # RESULT CHECK
+            if check_win():
+                print("WIN")
+                set_color(0,255,0)
+                win_sound()
+            else:
+                print("LOSE")
+                set_color(255,0,0)
+                lose_sound()
+
+            time.sleep(15)
+            clear()
+            game_active = False
+
+            # wait release
+            while button.value() == 0:
+                pass
+
+    time.sleep(0.05)
