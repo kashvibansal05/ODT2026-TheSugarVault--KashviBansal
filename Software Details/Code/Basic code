@@ -1,1 +1,283 @@
+Initially we wrote our code in 4 parts corresponding to 4 phases in the user journey when using the claw machine. The phase description along with the code are as follows.
+
+Phase 1: Our claw machine starts off with the user inserting a coin into the slot in the controller box. there's an ir sensor at the place the coin will get collected, the moment the ir sensor detects the coin, the buzzer goes off playing a sound indicating the game has begun and the rgb strip lights animate and change colours with each led lighting up one by one and then stops at blue to stay that way till the end. once it stays one colour a timer of 1 minute begins in the background.
+CODE
+from machine import Pin, PWM
+import neopixel
+import time
+
+#IR SENSOR
+ir = Pin(12, Pin.IN, Pin.PULL_UP)
+
+#BUZZER
+buzzer = PWM(Pin(19))
+buzzer.freq(1000)
+
+def play_start_sound():
+    tones = [800, 1000, 1200, 1500]
+    for t in tones:
+        buzzer.freq(t)
+        buzzer.duty(512)
+        time.sleep(0.15)
+    buzzer.duty(0)
+
+#LED STRIP
+num_leds = 30
+np = neopixel.NeoPixel(Pin(25), num_leds)
+
+def clear():
+    for i in range(num_leds):
+        np[i] = (0,0,0)
+    np.write()
+
+def animate(color):
+    for i in range(num_leds):
+        np[i] = color
+        np.write()
+        time.sleep(0.1)
+
+def all_blue():
+    for i in range(num_leds):
+        np[i] = (0,0,255)
+    np.write()
+
+while True:
+    if ir.value() == 0:
+        print("Coin detected → START GAME")
+
+        play_start_sound()
+
+        animate((255,0,0))
+        animate((0,255,0))
+        animate((0,0,255))
+
+        all_blue()
+
+        print("Timer Started (1 min)")  # placeholder
+
+        time.sleep(2)
+        clear()
+
+    time.sleep(0.1)
+
+
+Phase 2: The main movement of the claw is governed using the the joystick. The movement of the claw is on all 4 axis. front and back is done using gear mechanism using one dc motor (clockwise and anticlockwise rotation) and sideways which is left and right follows the same mechanism using dc motor (clockwise and anticlockwise rotation)
+CODE
+from machine import Pin, ADC, PWM
+import time
+
+#MOTOR PINS 
+fb_in1 = PWM(Pin(12))
+fb_in2 = PWM(Pin(14))
+
+lr_in1 = PWM(Pin(18))
+lr_in2 = PWM(Pin())
+
+#PWM frequency
+for m in [fb_in1, fb_in2, lr_in1, lr_in2]:
+    m.freq(1000)
+
+#SPEED 
+SPEED = 500   
+
+#JOYSTICK
+joy_x = ADC(Pin(34))
+joy_y = ADC(Pin(35))
+
+joy_x.atten(ADC.ATTN_11DB)
+joy_y.atten(ADC.ATTN_11DB)
+
+CENTER_LOW = 1800
+CENTER_HIGH = 2200
+
+def stop_all():
+    fb_in1.duty(0)
+    fb_in2.duty(0)
+    lr_in1.duty(0)
+    lr_in2.duty(0)
+
+while True:
+    x = joy_x.read()
+    y = joy_y.read()
+
+    print("X:", x, "Y:", y)
+
+    #FRONT/BACK
+    if y > CENTER_HIGH:
+        fb_in1.duty(0)
+        fb_in2.duty(SPEED)
+    elif y < CENTER_LOW:
+        fb_in1.duty(SPEED)
+        fb_in2.duty(0)
+    else:
+        fb_in1.duty(0)
+        fb_in2.duty(0)
+
+    #LEFT/RIGHT
+    if x > CENTER_HIGH:
+        lr_in1.duty(SPEED)
+        lr_in2.duty(0)
+    elif x < CENTER_LOW:
+        lr_in1.duty(0)
+        lr_in2.duty(SPEED)
+    else:
+        lr_in1.duty(0)
+        lr_in2.duty(0)
+
+    time.sleep(0.05)
+
+Phase 3: When the user is satisfied with the position of the claw, he presses the push button which moves the claw downward using a dc motor and when it reaches the optimum mentioned height, the claw opens to grab the object using a servo motor and closes fully. it then retracts upward to its original position. right after this the claw with the help of the dc motors used in the x and y axiz moves to the front most left most position and the claw automatically opens fully dropping what it has collected. 
+claw opens fully --> claw moves down --> claw closes --> claw comes back up --> claw moves to front most left most position --> claw opens to drop object 
+CODE
+from machine import Pin, PWM
+import time
+
+#SERVO
+servo = PWM(Pin(12), freq=50)
+
+def set_servo_angle(angle):
+    duty = int(40 + (angle / 180) * 115)
+    servo.duty(duty)
+
+#DC MOTOR
+in1 = Pin(25, Pin.OUT)
+in2 = Pin(26, Pin.OUT)
+
+def motor_clockwise():
+    in1.value(1)
+    in2.value(0)
+
+def motor_anticlockwise():
+    in1.value(0)
+    in2.value(1)
+
+def motor_stop():
+    in1.value(0)
+    in2.value(0)
+
+#PUSH BUTTON
+button = Pin(5, Pin.IN, Pin.PULL_UP)
+
+#MAIN LOOP
+while True:
+    if button.value() == 0:   #button pressed
+
+        # 1. Claw opens
+        set_servo_angle(0)
+        time.sleep(2)
+
+        # 2. Motor clockwise (down)
+        motor_clockwise()
+        time.sleep(3)
+        motor_stop()
+
+        # 3. Claw closes
+        set_servo_angle(90)
+        time.sleep(2)
+
+        # 4. Motor anticlockwise (up)
+        motor_anticlockwise()
+        time.sleep(3)
+        motor_stop()
+
+        # wait till button is released (prevents repeat spam)
+        while button.value() == 0:
+            pass
+
+    time.sleep(0.1)
+
+Phase 4: the place where the object is dropped, at the bottom theres a hc sr04 ultrasonic sensor. if the sensor detects an object, the lights turn green and the buzzer plays a winning sound. if after 5 seconds of the claw opening at that place, no object is detected then the led strip lights turn red and the buzzer plays a losing sound. if the 1 minute time is up, the same sound plays and the leds turn red like in the previous case. Whether the person wins or doesn't, in both cases, the game restarts itself after the light has either turned red or green and remained that way for 15 seconds until the code resets itself to run from the start again. (no second chances or redos)
+CODE
+from machine import Pin, PWM
+import neopixel
+import time
+
+# ULTRASONIC
+trig = Pin(27, Pin.OUT)
+echo = Pin(14, Pin.IN)
+
+# BUZZER
+buzzer = PWM(Pin(4))
+buzzer.freq(1000)
+
+# LED STRIP
+np = neopixel.NeoPixel(Pin(25), 30)
+
+distance = 0
+
+def set_color(r, g, b):
+    for i in range(30):
+        np[i] = (r, g, b)
+    np.write()
+
+def win_sound():
+    tones = [1000, 1200, 1500]
+    for t in tones:
+        buzzer.freq(t)
+        buzzer.duty(600)
+        time.sleep(0.2)
+    buzzer.duty(0)
+
+def lose_sound():
+    tones = [600, 400, 300]
+    for t in tones:
+        buzzer.freq(t)
+        buzzer.duty(600)
+        time.sleep(0.3)
+    buzzer.duty(0)
+
+while True:
+    print("Checking drop...")
+
+    success = False
+
+    for _ in range(5):
+
+        # ULTRASONIC 
+        trig.value(0)
+        time.sleep_us(2)
+        trig.value(1)
+        time.sleep_us(10)
+        trig.value(0)
+
+        # wait for echo HIGH
+        t1 = time.ticks_us()
+        while echo.value() == 0:
+            if time.ticks_diff(time.ticks_us(), t1) > 30000:
+                distance = 999
+                break
+
+        start = time.ticks_us()
+
+        # wait for echo LOW
+        t2 = time.ticks_us()
+        while echo.value() == 1:
+            if time.ticks_diff(time.ticks_us(), t2) > 30000:
+                distance = 999
+                break
+
+        end = time.ticks_us()
+
+        duration = time.ticks_diff(end, start)
+        distance = (duration * 0.034) / 2
+
+        print("Distance:", distance)
+
+        if distance < 10:
+            success = True
+            break
+
+        time.sleep(1)
+
+    if success:
+        print("WIN")
+        set_color(0, 255, 0)
+        win_sound()
+    else:
+        print("LOSE")
+        set_color(255, 0, 0)
+        lose_sound()
+
+    time.sleep(5)
+
 
